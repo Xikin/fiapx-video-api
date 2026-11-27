@@ -1,0 +1,2 @@
+# Falso positivo: texto de exemplo ("troque-por-um-segredo-...") no .env.example, não é segredo real.
+.env.example:generic-api-key:4
