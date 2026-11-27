@@ -158,6 +158,18 @@ describe('autenticação', () => {
     ['outro emissor', { authorization: `Bearer ${token({ sub: 'x' }, { emissor: 'intruso' })}` }],
     ['expirado', { authorization: `Bearer ${token({ sub: 'x' }, { expirado: true })}` }],
     ['sem e-mail', { authorization: `Bearer ${token({ sub: 'x', email: '' })}` }],
+    // Sem `exp` o token valeria para sempre.
+    ['sem exp', { authorization: `Bearer ${token({ sub: 'x' }, { semExp: true })}` }],
+    [
+      'validade acima do máximo (48 h)',
+      { authorization: `Bearer ${token({ sub: 'x' }, { validadeMs: 48 * 3600_000 })}` },
+    ],
+    // `sub` com barra entraria na pasta de outro usuário no S3.
+    ['sub com barra', { authorization: `Bearer ${token({ sub: 'usuario-2/x' })}` }],
+    [
+      'e-mail com quebra de linha',
+      { authorization: `Bearer ${token({ sub: 'x', email: 'a@b.com\r\nBcc: c@d.com' })}` },
+    ],
   ])('401 com %s', async (_caso, headers) => {
     const res = await app.inject({ method: 'GET', url: '/videos', headers });
     expect(res.statusCode).toBe(401);
@@ -202,6 +214,19 @@ describe('validação', () => {
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({ code: 'BUSINESS_ERROR' });
+  });
+
+  it.each([
+    ['quebra de linha', 'aula\n1.mp4'],
+    ['inversão de texto (U+202E)', 'aula‮exe.mp4'],
+  ])('422 para nome de arquivo com %s', async (_caso, nomeArquivo) => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/videos',
+      headers: auth(),
+      payload: { nomeArquivo, contentType: 'video/mp4', tamanhoBytes: 10 },
+    });
+    expect(res.statusCode).toBe(422);
   });
 
   it('422 para id que não é UUID', async () => {
@@ -252,6 +277,31 @@ describe('saúde, documentação e rastreio', () => {
       headers: { 'x-request-id': 'abc-123' },
     });
     expect(res.headers['x-request-id']).toBe('abc-123');
+  });
+
+  it('troca um x-request-id fora do formato por um UUID', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { 'x-request-id': 'a'.repeat(65) },
+    });
+    expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('envia cabeçalhos de segurança e no-store nas respostas da API', async () => {
+    const res = await app.inject({ method: 'GET', url: '/videos', headers: auth() });
+    expect(res.headers).toMatchObject({
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'cache-control': 'no-store',
+      'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+    });
+  });
+
+  it('o Swagger UI não recebe a CSP restritiva da API', async () => {
+    const res = await app.inject({ method: 'GET', url: '/docs/json' });
+    expect(res.headers['content-security-policy']).toBeUndefined();
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('404 de rota inexistente segue o formato de erro', async () => {

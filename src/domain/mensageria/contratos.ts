@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { chaveZipPertenceAoVideo } from '../videos/video';
 
 /**
  * Contratos das mensagens trocadas com o fiapx-video-processor pelo exchange
@@ -76,5 +77,17 @@ export function lerResultadoDoWorker(bruto: unknown): ResultadoDoWorker {
     throw new MensagemInvalidaError(
       `mensagem fora do contrato: ${resultado.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
     );
-  return resultado.data;
+
+  // Regra que cruza dois campos do envelope (videoId x dados.chaveZip): feita aqui,
+  // depois do parse, para não depender de refinamentos dentro do discriminatedUnion.
+  // Uma chave fora do vídeo é definitiva: vai para a DLQ, sem retentativa.
+  const mensagem = resultado.data;
+  if (
+    mensagem.tipo === TIPOS.PROCESSADO &&
+    !chaveZipPertenceAoVideo(mensagem.videoId, mensagem.dados.chaveZip)
+  )
+    throw new MensagemInvalidaError(
+      'mensagem fora do contrato: dados.chaveZip não pertence ao vídeo informado',
+    );
+  return mensagem;
 }

@@ -6,7 +6,7 @@ import {
   notificadorDesligado,
 } from '../../src/infrastructure/notificacao/email-notificador';
 import { cacheDesligado } from '../../src/domain/portas/cache';
-import { carregarEnv } from '../../src/config/env';
+import { carregarEnv, lerTrustProxy } from '../../src/config/env';
 import { LoggerEspiao } from '../support/fakes';
 
 describe('RedisCache', () => {
@@ -94,6 +94,24 @@ describe('carregarEnv', () => {
       S3_FORCE_PATH_STYLE: false,
       VIDEO_TAMANHO_MAXIMO_MB: 500,
     });
+  });
+
+  it('Swagger ligado fora de produção e desligado em produção, salvo pedido explícito', () => {
+    expect(carregarEnv(minimo).SWAGGER_ENABLED).toBe(true);
+    expect(carregarEnv({ ...minimo, NODE_ENV: 'production' }).SWAGGER_ENABLED).toBe(false);
+    expect(
+      carregarEnv({ ...minimo, NODE_ENV: 'production', SWAGGER_ENABLED: 'true' }).SWAGGER_ENABLED,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['', false],
+    ['false', false],
+    ['true', true],
+    ['1', 1],
+    ['10.0.0.0/8, 172.16.0.0/12', ['10.0.0.0/8', '172.16.0.0/12']],
+  ])('TRUST_PROXY=%j vira %j', (valor, esperado) => {
+    expect(lerTrustProxy(valor)).toEqual(esperado);
   });
 
   it('falha listando só os nomes das variáveis, sem os valores', () => {

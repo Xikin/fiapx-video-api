@@ -73,6 +73,8 @@ export function montarContainer(env: Env, logger: Logger) {
       ids,
       relogioDoSistema,
       env.VIDEO_TAMANHO_MAXIMO_MB * 1024 * 1024,
+      // A janela da cota é o TTL da URL: envio mais antigo que isso já não pode ser concluído.
+      { maximo: env.VIDEO_ENVIOS_PENDENTES_MAX, janelaSegundos: env.URL_ASSINADA_TTL_SEGUNDOS },
     ),
     confirmarEnvio: new ConfirmarEnvioUseCase(videos, armazenamento, cache, ids, relogioDoSistema),
     listarVideos: new ListarVideosUseCase(videos, cache),
@@ -129,6 +131,8 @@ export function montarContainer(env: Env, logger: Logger) {
   return {
     casos,
     prontidao,
+    /** Exposto para o rate limit dividir o contador entre réplicas (null sem REDIS_URL). */
+    redis,
     async iniciarMensageria() {
       if (!mensageria || !relay) {
         logger.warn({ evento: 'mensageria_desligada' }, 'RABBITMQ_URL ausente: o outbox acumula');

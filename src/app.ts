@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import type Redis from 'ioredis';
 import fastifyCors from '@fastify/cors';
 import fastifyRateLimit from '@fastify/rate-limit';
 import fastifySwagger from '@fastify/swagger';
@@ -30,17 +31,62 @@ export type EstadoDependencia = 'ok' | 'indisponivel' | 'desligada';
 
 export interface OpcoesApp {
   casos: CasosDeUso;
-  jwt: { segredo: string; emissor: string };
+  jwt: {
+    segredo: string;
+    emissor: string;
+    /** Claim `aud` exigido; opcional até o emissor passar a enviá-lo. */
+    audiencia?: string;
+    /** Teto de validade (exp - agora) aceito, em segundos. */
+    validadeMaximaSegundos?: number;
+  };
   /** Verifica as dependências para o readiness probe do Kubernetes. */
   prontidao?: () => Promise<Record<string, EstadoDependencia>>;
   log?: { nivel: string } | false;
   swagger?: boolean;
   origensPermitidas?: string[];
   limitePorMinuto?: number;
+  /**
+   * Quais proxies são confiáveis para ler o IP real em `X-Forwarded-For`.
+   * Sem isso, atrás do Load Balancer todo cliente "tem" o IP do LB e o rate
+   * limit vira um limite global (um atacante bloqueia todos). Nunca use `true`
+   * se a API puder ser acessada sem passar pelo proxy: o cliente forjaria o IP.
+   */
+  trustProxy?: boolean | number | string[];
+  /**
+   * Redis compartilhado pelo rate limit. Sem ele, cada réplica conta sozinha e o
+   * limite real vira `limitePorMinuto × réplicas`.
+   */
+  redisRateLimit?: Redis;
 }
+
+/** Formato aceito para o `x-request-id` vindo do cliente; o resto ganha um UUID novo. */
+const FORMATO_REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** Cabeçalhos de segurança enviados em todas as respostas. */
+const CABECALHOS_SEGURANCA: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+  'cross-origin-resource-policy': 'same-origin',
+  // Navegadores ignoram HSTS em HTTP puro, então é seguro mandar sempre.
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+};
+
+/**
+ * Respostas JSON da API: nada pode ser executado nem embutido, e nada vai para
+ * cache. As respostas trazem URLs assinadas e dados do usuário, que não devem
+ * ficar guardados em proxies ou no disco do navegador.
+ */
+const CABECALHOS_API: Record<string, string> = {
+  'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+  'cache-control': 'no-store',
+};
 
 export async function buildApp(opcoes: OpcoesApp): Promise<FastifyInstance> {
   const app = Fastify({
+    // O Fastify aceita número de saltos em tempo de execução (lib/request.js), mas a
+    // tipagem da v5 omite `number`; a conversão só ajusta o tipo.
+    trustProxy: (opcoes.trustProxy ?? false) as boolean | string | string[],
     logger: opcoes.log
       ? {
           level: opcoes.log.nivel,
@@ -52,8 +98,10 @@ export async function buildApp(opcoes: OpcoesApp): Promise<FastifyInstance> {
         }
       : false,
     genReqId(req) {
+      // O id vai para os logs e volta na resposta. Restringir o formato impede
+      // poluir os logs ou forjar a correlação com valores arbitrários.
       const id = req.headers['x-request-id'];
-      return typeof id === 'string' && id.length > 0 && id.length <= 200 ? id : randomUUID();
+      return typeof id === 'string' && FORMATO_REQUEST_ID.test(id) ? id : randomUUID();
     },
   });
 
@@ -61,6 +109,10 @@ export async function buildApp(opcoes: OpcoesApp): Promise<FastifyInstance> {
   app.setSerializerCompiler(serializerCompiler);
   app.addHook('onSend', async (req, rep, payload) => {
     rep.header('x-request-id', req.id);
+    rep.headers(CABECALHOS_SEGURANCA);
+    // O Swagger UI precisa de scripts e estilos próprios; a CSP restritiva e o
+    // no-store valem para o resto, que só devolve JSON.
+    if (!req.url.startsWith('/docs')) rep.headers(CABECALHOS_API);
     return payload;
   });
 
@@ -72,6 +124,13 @@ export async function buildApp(opcoes: OpcoesApp): Promise<FastifyInstance> {
   await app.register(fastifyRateLimit, {
     max: opcoes.limitePorMinuto ?? 120,
     timeWindow: '1 minute',
+    // Com Redis, todas as réplicas dividem o mesmo contador.
+    ...(opcoes.redisRateLimit
+      ? { redis: opcoes.redisRateLimit, nameSpace: 'fiapx-video-api:rate-limit:' }
+      : {}),
+    // Redis fora do ar não derruba a API: a requisição passa sem ser contada,
+    // a mesma escolha do cache (RedisCache). Fica registrado no log do Redis.
+    skipOnError: true,
     errorResponseBuilder: () => new TooManyRequestsError('Muitas requisições; tente em instantes'),
   });
   await app.register(autenticacao, opcoes.jwt);

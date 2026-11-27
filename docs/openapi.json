@@ -53,7 +53,8 @@
                   "nomeArquivo": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 255
+                    "maxLength": 255,
+                    "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
                   },
                   "contentType": {
                     "type": "string",
@@ -217,6 +218,45 @@
             }
           },
           "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
             "description": "Default Response",
             "content": {
               "application/json": {

@@ -3,6 +3,7 @@ import {
   STATUS_VIDEO,
   Video,
   chaveDoVideo,
+  chaveZipPertenceAoVideo,
   sanitizarNomeArquivo,
 } from '../../src/domain/videos/video';
 import { ConflictError } from '../../src/shared/errors';
@@ -89,5 +90,33 @@ describe('sanitizarNomeArquivo', () => {
 
   it('monta a chave a partir do nome limpo', () => {
     expect(chaveDoVideo('u', 'v', 'a b.mp4')).toBe('videos/u/v/a-b.mp4');
+  });
+});
+
+describe('chaveZipPertenceAoVideo', () => {
+  const ID = '11111111-1111-4111-8111-111111111111';
+
+  it.each([`zips/${ID}.zip`, `zips/${ID}/frames.zip`, `zips/usuario-1/${ID}/frames.zip`])(
+    'aceita %s',
+    (chave) => {
+      expect(chaveZipPertenceAoVideo(ID, chave)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['vídeo original de outro usuário', `videos/usuario-2/${ID}/aula.mp4`],
+    ['zip de outro vídeo', 'zips/22222222-2222-4222-8222-222222222222.zip'],
+    ['travessia de pasta', `zips/${ID}/../outro.zip`],
+    ['segmento vazio', `zips//${ID}.zip`],
+    ['barra inicial', `/zips/${ID}.zip`],
+    ['extensão diferente', `zips/${ID}.mp4`],
+    ['caractere fora da lista', `zips/${ID} .zip`],
+    ['chave maior que o limite do S3', `zips/${ID}/${'a'.repeat(1100)}.zip`],
+  ])('recusa %s', (_caso, chave) => {
+    expect(chaveZipPertenceAoVideo(ID, chave)).toBe(false);
+  });
+
+  it('recusa quando o id do vídeo é vazio', () => {
+    expect(chaveZipPertenceAoVideo('', 'zips/.zip')).toBe(false);
   });
 });

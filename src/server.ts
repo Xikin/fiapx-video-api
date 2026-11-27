@@ -16,10 +16,18 @@ async function iniciar() {
   const app = await buildApp({
     casos: container.casos,
     prontidao: container.prontidao,
-    jwt: { segredo: env.JWT_SECRET, emissor: env.JWT_ISSUER },
+    jwt: {
+      segredo: env.JWT_SECRET,
+      emissor: env.JWT_ISSUER,
+      audiencia: env.JWT_AUDIENCE,
+      validadeMaximaSegundos: env.JWT_VALIDADE_MAXIMA_SEGUNDOS,
+    },
     log: { nivel: env.LOG_LEVEL },
     swagger: env.SWAGGER_ENABLED,
     origensPermitidas: origens,
+    trustProxy: env.TRUST_PROXY,
+    limitePorMinuto: env.RATE_LIMIT_POR_MINUTO,
+    redisRateLimit: container.redis ?? undefined,
   });
   Object.assign(logger, {
     info: app.log.info.bind(app.log),

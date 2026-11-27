@@ -152,3 +152,41 @@ export function sanitizarNomeArquivo(nome: string): string {
 export function chaveDoVideo(usuarioId: string, videoId: string, nomeArquivo: string): string {
   return `videos/${usuarioId}/${videoId}/${sanitizarNomeArquivo(nomeArquivo)}`;
 }
+
+/** Pasta do bucket onde o fiapx-video-processor grava os zips de frames. */
+export const PREFIXO_ZIPS = 'zips/';
+
+/** Limite de tamanho de chave do próprio S3 (1024 bytes); acima disso não é chave válida. */
+const TAMANHO_MAXIMO_CHAVE = 1024;
+
+/** Cada parte do caminho só aceita caracteres seguros: sem espaço, `\` ou controle. */
+const SEGMENTO_SEGURO = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Confere se a chave do zip que o worker informou aponta para um objeto **deste**
+ * vídeo. Sem isso, quem conseguir publicar no exchange poderia mandar a chave de
+ * um arquivo de outro usuário (por exemplo `videos/<outro>/...`) e a API assinaria
+ * uma URL de download para ela (Broken Access Control).
+ *
+ * Formatos aceitos, sempre sob `zips/`:
+ *   - `zips/<videoId>.zip`
+ *   - `zips/<...>/<videoId>/<arquivo>.zip`
+ *
+ * Recusa segmentos vazios (`//`), `.` e `..`, caracteres fora da lista segura,
+ * extensão diferente de `.zip` e chaves maiores que o limite do S3.
+ */
+export function chaveZipPertenceAoVideo(videoId: string, chave: string): boolean {
+  // Um id vazio faria `zips/.zip` casar; o id real é sempre um UUID.
+  if (!videoId || chave.length > TAMANHO_MAXIMO_CHAVE || !chave.startsWith(PREFIXO_ZIPS))
+    return false;
+
+  const segmentos = chave.slice(PREFIXO_ZIPS.length).split('/');
+  const invalido = (s: string) => !SEGMENTO_SEGURO.test(s) || s === '.' || s === '..';
+  if (segmentos.some(invalido)) return false;
+
+  const arquivo = segmentos.at(-1) ?? '';
+  if (!arquivo.toLowerCase().endsWith('.zip')) return false;
+
+  // O id do vídeo precisa ser o nome do arquivo ou uma das pastas acima dele.
+  return arquivo === `${videoId}.zip` || segmentos.slice(0, -1).includes(videoId);
+}

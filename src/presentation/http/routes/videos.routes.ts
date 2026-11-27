@@ -30,6 +30,13 @@ const erroSchema = z.object({
   errors: z.array(z.object({ campo: z.string(), mensagem: z.string().optional() })).optional(),
 });
 const idParams = z.object({ id: z.string().uuid() });
+
+/**
+ * Recusa caracteres de controle (\p{Cc}: quebras de linha, NUL...) e de formatação
+ * (\p{Cf}: por exemplo U+202E, que inverte o texto e disfarça `exe.mp4` como
+ * `4pm.exe`). O nome volta na API e vai no assunto do e-mail de falha.
+ */
+const SEM_CARACTERES_DE_CONTROLE = /^[^\p{Cc}\p{Cf}]+$/u;
 const seguranca = [{ bearerAuth: [] }];
 
 export const videosRoutes: FastifyPluginAsyncZod<{ casos: CasosDeUso }> = async (
@@ -48,7 +55,12 @@ export const videosRoutes: FastifyPluginAsyncZod<{ casos: CasosDeUso }> = async 
           'Envie o arquivo com `PUT` na `envio.url`, usando os `envio.cabecalhos`, e depois chame `POST /videos/{id}/confirmar-envio`.',
         security: seguranca,
         body: z.object({
-          nomeArquivo: z.string().trim().min(1).max(255),
+          nomeArquivo: z
+            .string()
+            .trim()
+            .min(1)
+            .max(255)
+            .regex(SEM_CARACTERES_DE_CONTROLE, 'O nome do arquivo tem caracteres não permitidos'),
           contentType: z.enum(TIPOS_DE_VIDEO_ACEITOS),
           tamanhoBytes: z.number().int().positive(),
         }),
@@ -56,6 +68,8 @@ export const videosRoutes: FastifyPluginAsyncZod<{ casos: CasosDeUso }> = async 
           201: z.object({ video: videoSchema, envio: urlAssinadaSchema }),
           401: erroSchema,
           422: erroSchema,
+          // Rate limit global ou cota de envios em aberto do usuário.
+          429: erroSchema,
         },
       },
     },

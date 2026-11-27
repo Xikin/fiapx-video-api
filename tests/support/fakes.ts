@@ -25,6 +25,14 @@ export class VideoRepositoryEmMemoria implements VideoRepository {
       .sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime())
       .map((v) => Video.restaurar(v));
   }
+  async contarAguardandoEnvioDesde(usuarioId: string, desde: Date) {
+    return [...this.videos.values()].filter(
+      (v) =>
+        v.usuarioId === usuarioId &&
+        v.status === 'AGUARDANDO_ENVIO' &&
+        v.criadoEm.getTime() >= desde.getTime(),
+    ).length;
+  }
   async salvar(video: Video, saida: Mensagem[] = []) {
     this.videos.set(video.id, video.paraDados());
     this.outbox.push(...saida);

@@ -29,6 +29,13 @@ describe('contratos de mensagens', () => {
     expect(() => lerResultadoDoWorker(errada)).toThrow(/dados\.totalFrames/);
   });
 
+  it('recusa video.processado com chaveZip de outro vídeo, direto para a DLQ', () => {
+    // Um publicador forjado tentando fazer a API assinar o arquivo de outro usuário.
+    const forjada = processado(VIDEO_ID, `videos/usuario-2/${VIDEO_ID}/aula.mp4`);
+    expect(() => lerResultadoDoWorker(forjada)).toThrow(MensagemInvalidaError);
+    expect(() => lerResultadoDoWorker(forjada)).toThrow(/chaveZip/);
+  });
+
   it('recusa versão diferente de 1', () => {
     expect(() => lerResultadoDoWorker({ ...falhou(VIDEO_ID), versao: 2 })).toThrow(
       MensagemInvalidaError,

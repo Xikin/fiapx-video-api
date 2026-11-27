@@ -39,6 +39,14 @@ export class PrismaVideoRepository implements VideoRepository {
     return linhas.map(paraEntidade);
   }
 
+  async contarAguardandoEnvioDesde(usuarioId: string, desde: Date): Promise<number> {
+    // Usa o índice (usuario_id, criado_em): o filtro por status só olha as linhas
+    // recentes do próprio usuário, então a contagem continua barata.
+    return this.prisma.video.count({
+      where: { usuarioId, status: 'AGUARDANDO_ENVIO', criadoEm: { gte: desde } },
+    });
+  }
+
   async salvar(video: Video, saida: Mensagem[] = []): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       await this.atualizar(tx, video);

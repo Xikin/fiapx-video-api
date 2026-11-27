@@ -15,6 +15,10 @@ Lambda atrás do API Gateway, e esse padrão foi aprovado.
 - A Video API valida o token de novo (`src/presentation/http/plugins/autenticacao.ts`), exigindo
   emissor, algoritmo e expiração. Isso protege a API quando chamada de dentro do cluster ou no
   Docker Compose.
+  - `exp` é obrigatório (`requiredClaims`): sem ele o fast-jwt aceitaria o token para sempre.
+  - Validade acima de `JWT_VALIDADE_MAXIMA_SEGUNDOS` (padrão 24 h) é recusada.
+  - `sub` só aceita `[A-Za-z0-9._:-]` (vira pasta no S3) e `email` precisa ter formato de e-mail.
+  - `aud` passa a ser exigido quando `JWT_AUDIENCE` estiver definido.
 - Vídeo de outro usuário responde 404, não 403, para não revelar quais ids existem.
 
 ## Consequências

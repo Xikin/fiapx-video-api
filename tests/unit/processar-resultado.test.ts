@@ -40,10 +40,10 @@ describe('ProcessarResultadoUseCase', () => {
   it('marca processando e depois concluído', async () => {
     await caso.execute(iniciado(videoId));
     expect(await status()).toBe(STATUS_VIDEO.PROCESSANDO);
-    await caso.execute(processado(videoId, 'zips/x.zip', 7));
+    await caso.execute(processado(videoId, `zips/${videoId}.zip`, 7));
     expect((await videos.buscarPorId(videoId))!.paraDados()).toMatchObject({
       status: STATUS_VIDEO.CONCLUIDO,
-      chaveZip: 'zips/x.zip',
+      chaveZip: `zips/${videoId}.zip`,
       totalFrames: 7,
     });
   });

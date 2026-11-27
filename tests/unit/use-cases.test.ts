@@ -7,8 +7,14 @@ import { GerarDownloadUseCase } from '../../src/application/use-cases/gerar-down
 import { STATUS_VIDEO } from '../../src/domain/videos/video';
 import { TIPOS } from '../../src/domain/mensageria/contratos';
 import { chaveListaDoUsuario } from '../../src/domain/portas/cache';
-import { BusinessError, ConflictError, NotFoundError } from '../../src/shared/errors';
 import {
+  BusinessError,
+  ConflictError,
+  NotFoundError,
+  TooManyRequestsError,
+} from '../../src/shared/errors';
+import {
+  AGORA,
   ArmazenamentoFalso,
   CacheEmMemoria,
   OUTRO_USUARIO,
@@ -82,6 +88,52 @@ describe('SolicitarEnvioUseCase', () => {
         tamanhoBytes: 11 * MB,
       }),
     ).rejects.toThrow(/limite de 10 MB/);
+  });
+
+  describe('cota de envios em aberto', () => {
+    const comCota = (maximo: number) =>
+      new SolicitarEnvioUseCase(
+        videos,
+        armazenamento,
+        cache,
+        idsSequenciais(),
+        relogioFixo(),
+        10 * MB,
+        { maximo, janelaSegundos: 900 },
+      );
+    const pedido = {
+      usuario: USUARIO,
+      nomeArquivo: 'a.mp4',
+      contentType: 'video/mp4',
+      tamanhoBytes: 1,
+    };
+
+    it('responde 429 ao passar do máximo e não cria o vídeo', async () => {
+      const caso = comCota(2);
+      await caso.execute(pedido);
+      await caso.execute(pedido);
+      await expect(caso.execute(pedido)).rejects.toThrow(TooManyRequestsError);
+      expect(videos.videos.size).toBe(2);
+    });
+
+    it('a cota é por usuário', async () => {
+      const caso = comCota(1);
+      await caso.execute(pedido);
+      await expect(caso.execute({ ...pedido, usuario: OUTRO_USUARIO })).resolves.toBeDefined();
+    });
+
+    it('envio abandonado fora da janela não conta', async () => {
+      // Vídeo criado há 1 hora: a URL dele (TTL 15 min) já expirou.
+      await videos.criar(novoVideo({ agora: new Date(AGORA.getTime() - 3600_000) }));
+      await expect(comCota(1).execute(pedido)).resolves.toBeDefined();
+    });
+
+    it('envio já confirmado não conta', async () => {
+      const confirmado = novoVideo();
+      confirmado.confirmarEnvio(AGORA);
+      await videos.criar(confirmado);
+      await expect(comCota(1).execute(pedido)).resolves.toBeDefined();
+    });
   });
 });
 
@@ -171,13 +223,26 @@ describe('GerarDownloadUseCase', () => {
   it('gera URL do zip com nome amigável quando o vídeo está concluído', async () => {
     const video = novoVideo();
     video.confirmarEnvio(new Date());
-    video.concluir({ chaveZip: 'zips/a.zip', totalFrames: 3 }, new Date());
+    video.concluir({ chaveZip: `zips/${video.id}.zip`, totalFrames: 3 }, new Date());
     await videos.criar(video);
 
     const url = await new GerarDownloadUseCase(videos, armazenamento).execute(USUARIO.id, video.id);
     expect(url.metodo).toBe('GET');
-    expect(url.url).toContain('zips/a.zip');
+    expect(url.url).toContain(`zips/${video.id}.zip`);
     expect(url.url).toContain('aula-1-frames.zip');
+  });
+
+  it('não assina URL para chave de zip gravada fora da pasta do vídeo', async () => {
+    const video = novoVideo();
+    video.confirmarEnvio(new Date());
+    // Simula uma linha antiga gravada antes da validação no consumidor.
+    const chaveDeOutroUsuario = `videos/${OUTRO_USUARIO.id}/x/aula.mp4`;
+    video.concluir({ chaveZip: chaveDeOutroUsuario, totalFrames: 3 }, new Date());
+    await videos.criar(video);
+
+    await expect(
+      new GerarDownloadUseCase(videos, armazenamento).execute(USUARIO.id, video.id),
+    ).rejects.toThrow(ConflictError);
   });
 
   it('recusa enquanto o zip não está pronto', async () => {
