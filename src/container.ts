@@ -66,16 +66,14 @@ export function montarContainer(env: Env, logger: Logger) {
     : notificadorDesligado;
 
   const casos: CasosDeUso = {
-    solicitarEnvio: new SolicitarEnvioUseCase(
-      videos,
-      armazenamento,
-      cache,
-      ids,
-      relogioDoSistema,
-      env.VIDEO_TAMANHO_MAXIMO_MB * 1024 * 1024,
-      // A janela da cota é o TTL da URL: envio mais antigo que isso já não pode ser concluído.
-      { maximo: env.VIDEO_ENVIOS_PENDENTES_MAX, janelaSegundos: env.URL_ASSINADA_TTL_SEGUNDOS },
-    ),
+    solicitarEnvio: new SolicitarEnvioUseCase(videos, armazenamento, cache, ids, relogioDoSistema, {
+      tamanhoMaximoBytes: env.VIDEO_TAMANHO_MAXIMO_MB * 1024 * 1024,
+      // Janela da cota = TTL da URL: envio mais antigo que isso não pode mais ser concluído.
+      pendentes: {
+        maximo: env.VIDEO_ENVIOS_PENDENTES_MAX,
+        janelaSegundos: env.URL_ASSINADA_TTL_SEGUNDOS,
+      },
+    }),
     confirmarEnvio: new ConfirmarEnvioUseCase(videos, armazenamento, cache, ids, relogioDoSistema),
     listarVideos: new ListarVideosUseCase(videos, cache),
     obterVideo: new ObterVideoUseCase(videos),

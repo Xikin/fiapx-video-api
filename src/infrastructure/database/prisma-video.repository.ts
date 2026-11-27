@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient, type Video as LinhaVideo } from '@prisma/cli
 import { Video } from '../../domain/videos/video';
 import type { MensagemConsumida, VideoRepository } from '../../domain/portas/video.repository';
 import type { Mensagem } from '../../domain/mensageria/contratos';
+import { ConcorrenciaError } from '../../shared/errors';
 
 type Tx = Prisma.TransactionClient;
 
@@ -23,6 +24,7 @@ export class PrismaVideoRepository implements VideoRepository {
   async criar(video: Video): Promise<void> {
     const { id, dados } = paraLinha(video);
     await this.prisma.video.create({ data: { id, ...dados } });
+    video.marcarPersistido();
   }
 
   async buscarPorId(id: string): Promise<Video | null> {
@@ -59,6 +61,8 @@ export class PrismaVideoRepository implements VideoRepository {
           })),
         });
     });
+    // Só depois do commit: se a transação falhar, a entidade continua esperando o status antigo.
+    video.marcarPersistido();
   }
 
   async jaConsumida(mensagem: MensagemConsumida): Promise<boolean> {
@@ -72,8 +76,11 @@ export class PrismaVideoRepository implements VideoRepository {
     try {
       await this.prisma.$transaction(async (tx) => {
         await tx.mensagemProcessada.create({ data: mensagem });
+        // Um ConcorrenciaError aqui desfaz também a marca de consumida: a mensagem
+        // continua "nova" e o caso de uso pode reler o vídeo e tentar de novo.
         await this.atualizar(tx, video);
       });
+      video.marcarPersistido();
       return true;
     } catch (erro) {
       if (ehDuplicada(erro)) return false;
@@ -81,8 +88,21 @@ export class PrismaVideoRepository implements VideoRepository {
     }
   }
 
+  /**
+   * Grava o vídeo só se o banco ainda estiver no status em que ele foi lido
+   * (concorrência otimista). Sem essa condição, dois consumidores em paralelo
+   * (ex.: "processamento iniciado" e "processado" do mesmo vídeo) liam NA_FILA e
+   * o último a gravar desfazia o outro, deixando o vídeo preso em PROCESSANDO.
+   *
+   * `updateMany` porque `update` só aceita filtro por chave única; `count === 0`
+   * significa que outra operação mudou o vídeo (ou que ele não existe).
+   */
   private async atualizar(tx: Tx, video: Video): Promise<void> {
     const { id, dados } = paraLinha(video);
-    await tx.video.update({ where: { id }, data: dados });
+    const { count } = await tx.video.updateMany({
+      where: { id, status: video.statusPersistido },
+      data: dados,
+    });
+    if (count === 0) throw new ConcorrenciaError();
   }
 }

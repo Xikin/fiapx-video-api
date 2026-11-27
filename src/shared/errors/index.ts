@@ -21,6 +21,17 @@ export class ConflictError extends AppError {
   }
 }
 
+/**
+ * Outra operação gravou o mesmo vídeo entre a leitura e a escrita (controle de
+ * concorrência otimista). É um 409 no HTTP; no consumidor, o caso de uso relê e
+ * tenta de novo.
+ */
+export class ConcorrenciaError extends ConflictError {
+  constructor() {
+    super('O vídeo foi alterado por outra operação; tente de novo');
+  }
+}
+
 export class BusinessError extends AppError {
   constructor(mensagem: string) {
     super(mensagem, 422, 'BUSINESS_ERROR');

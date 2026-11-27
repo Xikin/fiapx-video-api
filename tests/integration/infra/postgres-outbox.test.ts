@@ -7,6 +7,7 @@ import { OutboxRelay } from '../../../src/infrastructure/mensageria/outbox-relay
 import type { PublicadorDeMensagens } from '../../../src/infrastructure/mensageria/rabbitmq';
 import { STATUS_VIDEO, Video } from '../../../src/domain/videos/video';
 import { TIPOS, type VideoEnviado } from '../../../src/domain/mensageria/contratos';
+import { ConcorrenciaError } from '../../../src/shared/errors';
 import { LoggerEspiao, USUARIO, novoVideo } from '../../support/fakes';
 import { iniciarPostgres } from '../../support/containers';
 
@@ -107,6 +108,44 @@ describe('PrismaVideoRepository (PostgreSQL real)', () => {
     expect(await repo.salvarAoConsumir(video, { ...consumo, consumidor: 'outro' })).toBe(true);
   });
 
+  it('concorrência otimista: quem leu o status antigo não sobrescreve o que outro gravou', async () => {
+    const video = novoVideo();
+    await repo.criar(video);
+    video.confirmarEnvio(new Date());
+    await repo.salvar(video, [evento(video)]);
+
+    // Dois consumidores leem o vídeo em NA_FILA.
+    const paraIniciar = (await repo.buscarPorId(video.id))!;
+    const paraConcluir = (await repo.buscarPorId(video.id))!;
+    paraConcluir.concluir({ chaveZip: `zips/${video.id}.zip`, totalFrames: 5 }, new Date());
+    expect(
+      await repo.salvarAoConsumir(paraConcluir, { id: crypto.randomUUID(), consumidor: 'c' }),
+    ).toBe(true);
+
+    // O segundo grava depois: recusado, e sem deixar a mensagem marcada como consumida.
+    paraIniciar.iniciarProcessamento(new Date());
+    const consumo = { id: crypto.randomUUID(), consumidor: 'c' };
+    await expect(repo.salvarAoConsumir(paraIniciar, consumo)).rejects.toThrow(ConcorrenciaError);
+    expect(await repo.jaConsumida(consumo)).toBe(false);
+    expect((await repo.buscarPorId(video.id))!.paraDados()).toMatchObject({
+      status: STATUS_VIDEO.CONCLUIDO,
+      chaveZip: `zips/${video.id}.zip`,
+    });
+  });
+
+  it('salvar com status desatualizado não grava o vídeo nem o outbox', async () => {
+    const video = novoVideo();
+    await repo.criar(video);
+    const copia = (await repo.buscarPorId(video.id))!;
+
+    video.confirmarEnvio(new Date());
+    await repo.salvar(video, [evento(video)]);
+
+    copia.confirmarEnvio(new Date());
+    await expect(repo.salvar(copia, [evento(copia)])).rejects.toThrow(ConcorrenciaError);
+    expect(await prisma.outbox.count()).toBe(1);
+  });
+
   it('erro diferente de duplicidade não é engolido', async () => {
     const fantasma = novoVideo({ id: crypto.randomUUID() });
     await expect(
@@ -198,6 +237,26 @@ describe('OutboxRelay (PostgreSQL real)', () => {
 
     expect(await prisma.outbox.count({ where: { routingKey: 'antiga' } })).toBe(0);
     expect(await prisma.outbox.count({ where: { publicadoEm: null } })).toBe(0);
+  });
+
+  it('apaga as marcas de consumo mais antigas que a retenção e mantém as recentes', async () => {
+    const antiga = { id: crypto.randomUUID(), consumidor: 'c' };
+    const recente = { id: crypto.randomUUID(), consumidor: 'c' };
+    await prisma.mensagemProcessada.create({
+      data: { ...antiga, processadaEm: new Date('2020-01-01') },
+    });
+    await prisma.mensagemProcessada.create({ data: recente });
+
+    const relay = new OutboxRelay(prisma, { publicar: async () => {} }, new LoggerEspiao(), {
+      intervaloMs: 1000,
+      lote: 10,
+      retencaoHoras: 72,
+      retencaoConsumidasHoras: 24,
+    });
+
+    expect(await relay.limparConsumidas()).toBe(1);
+    expect(await repo.jaConsumida(antiga)).toBe(false);
+    expect(await repo.jaConsumida(recente)).toBe(true);
   });
 
   it('falha no ciclo é registrada sem derrubar o processo', async () => {

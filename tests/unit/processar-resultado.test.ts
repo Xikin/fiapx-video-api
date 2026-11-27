@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ProcessarResultadoUseCase } from '../../src/application/use-cases/processar-resultado.use-case';
-import { STATUS_VIDEO } from '../../src/domain/videos/video';
+import {
+  CONSUMIDOR_RESULTADOS,
+  MAX_TENTATIVAS_CONCORRENCIA,
+  ProcessarResultadoUseCase,
+} from '../../src/application/use-cases/processar-resultado.use-case';
+import { STATUS_VIDEO, Video } from '../../src/domain/videos/video';
+import { ConcorrenciaError } from '../../src/shared/errors';
 import { MensagemInvalidaError } from '../../src/domain/mensageria/contratos';
 import { chaveListaDoUsuario } from '../../src/domain/portas/cache';
 import {
@@ -87,6 +92,46 @@ describe('ProcessarResultadoUseCase', () => {
     await caso.execute(iniciado(videoId));
     expect(await status()).toBe(STATUS_VIDEO.CONCLUIDO);
     expect(logger.eventos('warn')).toContain('resultado_ignorado');
+  });
+
+  describe('consumo em paralelo do mesmo vídeo', () => {
+    it('"iniciado" lido antes de "processado" gravar não desfaz o CONCLUIDO', async () => {
+      // Simula a corrida: o consumidor de "iniciado" leu o vídeo ainda em NA_FILA,
+      // e "processado" gravou CONCLUIDO antes de ele terminar.
+      const lidoAntes = await videos.buscarPorId(videoId);
+      await caso.execute(processado(videoId));
+
+      const buscarReal = videos.buscarPorId.bind(videos);
+      let primeiraLeitura = true;
+      videos.buscarPorId = async (id) => {
+        if (!primeiraLeitura) return buscarReal(id);
+        primeiraLeitura = false;
+        return lidoAntes;
+      };
+      await caso.execute(iniciado(videoId));
+
+      // Antes da correção: PROCESSANDO com chaveZip null (zip perdido).
+      expect((await buscarReal(videoId))!.paraDados()).toMatchObject({
+        status: STATUS_VIDEO.CONCLUIDO,
+        chaveZip: `zips/${videoId}.zip`,
+      });
+      expect(logger.eventos('warn')).toEqual(['conflito_de_concorrencia', 'resultado_ignorado']);
+    });
+
+    it('conflito persistente esgota as tentativas e sobe o erro para a retentativa da fila', async () => {
+      const lidoAntes = await videos.buscarPorId(videoId);
+      await caso.execute(processado(videoId));
+      // Toda leitura devolve a cópia antiga: nunca consegue gravar.
+      videos.buscarPorId = async () => (lidoAntes ? Video.restaurar(lidoAntes.paraDados()) : null);
+
+      const mensagem = iniciado(videoId);
+      await expect(caso.execute(mensagem)).rejects.toThrow(ConcorrenciaError);
+      expect(logger.eventos('warn')).toHaveLength(MAX_TENTATIVAS_CONCORRENCIA - 1);
+      // O conflito desfez a marca de consumida: a reentrega vai ser processada.
+      expect(await videos.jaConsumida({ id: mensagem.id, consumidor: CONSUMIDOR_RESULTADOS })).toBe(
+        false,
+      );
+    });
   });
 
   it('falha no e-mail é registrada, mas não devolve a mensagem para a fila', async () => {

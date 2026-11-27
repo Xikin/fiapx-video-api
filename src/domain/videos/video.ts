@@ -50,7 +50,21 @@ export interface NovoVideo {
  * uma entrega fora de ordem não desfaça um estado final.
  */
 export class Video {
-  private constructor(private dados: DadosVideo) {}
+  /**
+   * Status que o banco tinha quando este objeto foi lido (ou gravado pela última
+   * vez). O repositório só grava se o banco ainda estiver nele: é o controle de
+   * concorrência otimista que impede um consumidor de sobrescrever o que outro
+   * gravou em paralelo.
+   *
+   * O status serve de versão porque a máquina de estados só anda para frente:
+   * um vídeo nunca volta a um status anterior, então não existe o problema ABA
+   * (sair de X e voltar a X sem o leitor perceber).
+   */
+  private statusNoBanco: StatusVideo;
+
+  private constructor(private dados: DadosVideo) {
+    this.statusNoBanco = dados.status;
+  }
 
   static criar(novo: NovoVideo): Video {
     return new Video({
@@ -88,6 +102,16 @@ export class Video {
   }
   get chaveZip() {
     return this.dados.chaveZip;
+  }
+
+  /** Status esperado no banco na próxima gravação; ver `statusNoBanco`. */
+  get statusPersistido(): StatusVideo {
+    return this.statusNoBanco;
+  }
+
+  /** Chamado pelo repositório depois que a gravação foi confirmada (commit). */
+  marcarPersistido(): void {
+    this.statusNoBanco = this.dados.status;
   }
 
   pertenceA(usuarioId: string): boolean {

@@ -55,5 +55,6 @@ model MensagemProcessada {
   processadaEm DateTime @default(now()) @map("processada_em")
 
   @@id([id, consumidor])
+  @@index([processadaEm])
   @@map("mensagens_processadas")
 }

@@ -49,14 +49,9 @@ beforeAll(async () => {
 
   app = await buildApp({
     casos: {
-      solicitarEnvio: new SolicitarEnvioUseCase(
-        videos,
-        armazenamento,
-        cache,
-        ids,
-        relogio,
-        50 * 1024 * 1024,
-      ),
+      solicitarEnvio: new SolicitarEnvioUseCase(videos, armazenamento, cache, ids, relogio, {
+        tamanhoMaximoBytes: 50 * 1024 * 1024,
+      }),
       confirmarEnvio: new ConfirmarEnvioUseCase(videos, armazenamento, cache, ids, relogio),
       listarVideos: new ListarVideosUseCase(videos, cache),
       obterVideo: new ObterVideoUseCase(videos),

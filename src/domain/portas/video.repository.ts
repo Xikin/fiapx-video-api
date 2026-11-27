@@ -6,6 +6,12 @@ export interface MensagemConsumida {
   consumidor: string;
 }
 
+/**
+ * As gravações (`salvar`, `salvarAoConsumir`) usam concorrência otimista: só
+ * gravam se o banco ainda estiver em `video.statusPersistido`. Caso contrário
+ * lançam `ConcorrenciaError` sem gravar nada (nem outbox, nem marca de consumida).
+ * Depois de uma gravação confirmada, chamam `video.marcarPersistido()`.
+ */
 export interface VideoRepository {
   criar(video: Video): Promise<void>;
   buscarPorId(id: string): Promise<Video | null>;

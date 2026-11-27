@@ -31,6 +31,16 @@ export interface OpcoesRabbitMQ {
 export const filaDeRetentativa = (fila: string) => `${fila}.retry`;
 export const filaDeMortas = (fila: string) => `${fila}.dlq`;
 
+/**
+ * Lê o contador `x-tentativas` do cabeçalho. Qualquer valor que não seja um
+ * inteiro >= 0 vale 0: antes, `Number('abc')` dava NaN, `NaN + 1 >= max` nunca
+ * era verdade e a mensagem ficava em retentativa para sempre, sem ir para a DLQ.
+ */
+export function lerTentativa(valor: unknown): number {
+  const numero = typeof valor === 'number' ? valor : Number(valor);
+  return Number.isSafeInteger(numero) && numero >= 0 ? numero : 0;
+}
+
 function conectarComRecuperacao(url: string, setup: (model: ChannelModel) => Promise<void>) {
   return connect(url, {
     recovery: { initialDelay: 500, maxDelay: 15_000, initialMaxRetries: 20, setup },
@@ -129,7 +139,19 @@ export class RabbitMQ implements PublicadorDeMensagens {
       const canalDeConsumo = await model.createChannel();
       await canalDeConsumo.prefetch(consumidor.prefetch ?? 10);
       await canalDeConsumo.consume(consumidor.fila, (entrega) => {
-        if (entrega) void this.receber(canalDeConsumo, consumidor, entrega);
+        if (!entrega) return;
+        // Última barreira: `receber` já trata os próprios erros, mas uma rejeição
+        // que escapasse daqui viraria "unhandled rejection" e derrubaria o processo.
+        this.receber(canalDeConsumo, consumidor, entrega).catch((erro: unknown) =>
+          this.opcoes.logger.error(
+            {
+              evento: 'consumo_falhou',
+              fila: consumidor.fila,
+              erro: erro instanceof Error ? erro.message : String(erro),
+            },
+            'erro inesperado ao tratar a mensagem',
+          ),
+        );
       });
     }
   }
@@ -152,7 +174,7 @@ export class RabbitMQ implements PublicadorDeMensagens {
   private async receber(canal: Channel, consumidor: Consumidor, entrega: ConsumeMessage) {
     const { logger } = this.opcoes;
     const cabecalhos = (entrega.properties.headers ?? {}) as Record<string, unknown>;
-    const tentativa = Number(cabecalhos['x-tentativas'] ?? 0);
+    const tentativa = lerTentativa(cabecalhos['x-tentativas']);
     const contexto = {
       fila: consumidor.fila,
       mensagemId: String(entrega.properties.messageId ?? ''),
@@ -161,34 +183,84 @@ export class RabbitMQ implements PublicadorDeMensagens {
       tentativa,
     };
 
+    // O tratamento fica separado do ack: se o tratamento deu certo e só o ack
+    // falhou (canal caiu), isso não é erro da mensagem e ela não deve ir para a
+    // retentativa. O broker a reentrega e a idempotência do consumidor absorve.
+    let erroDoTratamento: unknown;
+    let tratou = false;
     try {
       const corpo: unknown = JSON.parse(entrega.content.toString('utf8'));
       await consumidor.tratar(corpo);
+      tratou = true;
+    } catch (erro) {
+      erroDoTratamento = erro;
+    }
+
+    if (tratou) {
+      this.confirmar(canal, entrega, contexto);
+      return;
+    }
+
+    const erro = erroDoTratamento;
+    const motivo = erro instanceof Error ? erro.message : String(erro);
+    const definitivo = erro instanceof SyntaxError || erro instanceof MensagemInvalidaError;
+    const esgotou = tentativa + 1 >= this.opcoes.maxTentativas;
+    const destino =
+      definitivo || esgotou ? filaDeMortas(consumidor.fila) : filaDeRetentativa(consumidor.fila);
+
+    try {
+      await this.reencaminhar(destino, entrega, {
+        ...cabecalhos,
+        'x-tentativas': tentativa + 1,
+        'x-ultimo-erro': motivo.slice(0, 500),
+      });
+    } catch {
+      // Sem como reencaminhar (broker fora do ar): devolve a mensagem para a fila.
+      this.devolver(canal, entrega, contexto);
+      return;
+    }
+    // Se este ack falhar, a cópia já está na retentativa/DLQ e o broker ainda
+    // reentrega a original: duplicata que a idempotência absorve.
+    this.confirmar(canal, entrega, contexto);
+
+    const registro = { evento: 'mensagem_falhou', ...contexto, destino, erro: motivo };
+    if (destino === filaDeMortas(consumidor.fila))
+      logger.error(registro, 'mensagem enviada para a fila de mortas');
+    else logger.warn(registro, 'mensagem agendada para nova tentativa');
+  }
+
+  /**
+   * `ack` que não lança. Com o canal fechado, a amqplib lança
+   * `IllegalOperationError`; nesse caso o broker já considera a mensagem não
+   * confirmada e vai reentregá-la, então basta registrar.
+   */
+  private confirmar(canal: Channel, entrega: ConsumeMessage, contexto: object): void {
+    try {
       canal.ack(entrega);
     } catch (erro) {
-      const motivo = erro instanceof Error ? erro.message : String(erro);
-      const definitivo = erro instanceof SyntaxError || erro instanceof MensagemInvalidaError;
-      const esgotou = tentativa + 1 >= this.opcoes.maxTentativas;
-      const destino =
-        definitivo || esgotou ? filaDeMortas(consumidor.fila) : filaDeRetentativa(consumidor.fila);
-
-      try {
-        await this.reencaminhar(destino, entrega, {
-          ...cabecalhos,
-          'x-tentativas': tentativa + 1,
-          'x-ultimo-erro': motivo.slice(0, 500),
-        });
-        canal.ack(entrega);
-      } catch {
-        canal.nack(entrega, false, true);
-        return;
-      }
-
-      const registro = { evento: 'mensagem_falhou', ...contexto, destino, erro: motivo };
-      if (destino === filaDeMortas(consumidor.fila))
-        logger.error(registro, 'mensagem enviada para a fila de mortas');
-      else logger.warn(registro, 'mensagem agendada para nova tentativa');
+      this.registrarCanalFechado('ack', contexto, erro);
     }
+  }
+
+  /** `nack` com devolução à fila que não lança (mesmo motivo de `confirmar`). */
+  private devolver(canal: Channel, entrega: ConsumeMessage, contexto: object): void {
+    try {
+      canal.nack(entrega, false, true);
+    } catch (erro) {
+      this.registrarCanalFechado('nack', contexto, erro);
+    }
+  }
+
+  private registrarCanalFechado(operacao: string, contexto: object, erro: unknown): void {
+    this.opcoes.logger.warn(
+      {
+        evento: 'canal_fechado',
+        operacao,
+        ...contexto,
+        erro: erro instanceof Error ? erro.message : String(erro),
+      },
+      'canal fechado antes da confirmação; o broker vai reentregar a mensagem',
+    );
   }
 
   private async reencaminhar(

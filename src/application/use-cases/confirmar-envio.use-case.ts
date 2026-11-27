@@ -3,7 +3,7 @@ import type { Armazenamento } from '../../domain/portas/armazenamento';
 import { chaveListaDoUsuario, type Cache } from '../../domain/portas/cache';
 import type { GeradorDeId, Relogio } from '../../domain/portas/relogio';
 import { ORIGEM_API, TIPOS, type VideoEnviado } from '../../domain/mensageria/contratos';
-import { BusinessError } from '../../shared/errors';
+import { BusinessError, ConcorrenciaError, ConflictError } from '../../shared/errors';
 import { paraDto, type VideoDto } from '../video.dto';
 import { buscarVideoDoUsuario } from './buscar-video-do-usuario';
 
@@ -51,7 +51,16 @@ export class ConfirmarEnvioUseCase {
         tamanhoBytes: dados.tamanhoBytes,
       },
     };
-    await this.videos.salvar(video, [evento]);
+    try {
+      await this.videos.salvar(video, [evento]);
+    } catch (erro) {
+      // Duas confirmações simultâneas (duplo clique, retentativa do cliente): as duas
+      // leram AGUARDANDO_ENVIO, mas só a primeira grava. A segunda não cria um
+      // segundo `video.enviado` no outbox, então o worker processa o vídeo uma vez só.
+      if (erro instanceof ConcorrenciaError)
+        throw new ConflictError('O envio deste vídeo já foi confirmado');
+      throw erro;
+    }
     await this.cache.remover(chaveListaDoUsuario(usuarioId));
     return paraDto(video);
   }

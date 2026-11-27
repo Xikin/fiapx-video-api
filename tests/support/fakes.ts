@@ -6,6 +6,7 @@ import type { Logger } from '../../src/domain/portas/logger';
 import type { GeradorDeId, Relogio } from '../../src/domain/portas/relogio';
 import type { Mensagem } from '../../src/domain/mensageria/contratos';
 import { Video } from '../../src/domain/videos/video';
+import { ConcorrenciaError } from '../../src/shared/errors';
 
 export class VideoRepositoryEmMemoria implements VideoRepository {
   readonly videos = new Map<string, ReturnType<Video['paraDados']>>();
@@ -14,6 +15,7 @@ export class VideoRepositoryEmMemoria implements VideoRepository {
 
   async criar(video: Video) {
     this.videos.set(video.id, video.paraDados());
+    video.marcarPersistido();
   }
   async buscarPorId(id: string) {
     const dados = this.videos.get(id);
@@ -34,8 +36,10 @@ export class VideoRepositoryEmMemoria implements VideoRepository {
     ).length;
   }
   async salvar(video: Video, saida: Mensagem[] = []) {
+    this.garantirSemConflito(video);
     this.videos.set(video.id, video.paraDados());
     this.outbox.push(...saida);
+    video.marcarPersistido();
   }
   async jaConsumida(m: MensagemConsumida) {
     return this.consumidas.has(`${m.id}:${m.consumidor}`);
@@ -43,9 +47,17 @@ export class VideoRepositoryEmMemoria implements VideoRepository {
   async salvarAoConsumir(video: Video, m: MensagemConsumida) {
     const chave = `${m.id}:${m.consumidor}`;
     if (this.consumidas.has(chave)) return false;
+    // Mesma ordem da transação real: conflito não deixa a mensagem marcada como consumida.
+    this.garantirSemConflito(video);
     this.consumidas.add(chave);
     this.videos.set(video.id, video.paraDados());
+    video.marcarPersistido();
     return true;
+  }
+
+  /** Mesma regra do PrismaVideoRepository: só grava se o status guardado for o esperado. */
+  private garantirSemConflito(video: Video) {
+    if (this.videos.get(video.id)?.status !== video.statusPersistido) throw new ConcorrenciaError();
   }
 }
 

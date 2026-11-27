@@ -37,11 +37,16 @@ export interface LimiteDeEnviosPendentes {
   janelaSegundos: number;
 }
 
-/** Sem limite: mantém o comportamento antigo para quem não configurar a cota. */
-export const SEM_LIMITE_DE_PENDENTES: LimiteDeEnviosPendentes = {
-  maximo: Number.POSITIVE_INFINITY,
-  janelaSegundos: 0,
-};
+/**
+ * Regras de envio que vêm da configuração. Agrupadas num objeto com nomes para
+ * não depender da ordem de vários números no construtor (fácil de trocar sem o
+ * compilador perceber).
+ */
+export interface PoliticaDeEnvio {
+  tamanhoMaximoBytes: number;
+  /** Cota de envios em aberto por usuário. Ausente = sem cota. */
+  pendentes?: LimiteDeEnviosPendentes;
+}
 
 /**
  * Primeiro passo do envio: registra o vídeo e devolve uma URL assinada para o
@@ -54,18 +59,18 @@ export class SolicitarEnvioUseCase {
     private readonly cache: Cache,
     private readonly ids: GeradorDeId,
     private readonly relogio: Relogio,
-    private readonly tamanhoMaximoBytes: number,
-    private readonly limitePendentes: LimiteDeEnviosPendentes = SEM_LIMITE_DE_PENDENTES,
+    private readonly politica: PoliticaDeEnvio,
   ) {}
 
   async execute(entrada: SolicitarEnvioEntrada): Promise<SolicitarEnvioSaida> {
+    const { tamanhoMaximoBytes } = this.politica;
     if (!(TIPOS_DE_VIDEO_ACEITOS as readonly string[]).includes(entrada.contentType))
       throw new BusinessError(
         `Tipo de arquivo não aceito: ${entrada.contentType}. Envie ${TIPOS_DE_VIDEO_ACEITOS.join(', ')}`,
       );
-    if (entrada.tamanhoBytes > this.tamanhoMaximoBytes)
+    if (entrada.tamanhoBytes > tamanhoMaximoBytes)
       throw new BusinessError(
-        `O vídeo passa do limite de ${Math.floor(this.tamanhoMaximoBytes / 1024 / 1024)} MB`,
+        `O vídeo passa do limite de ${Math.floor(tamanhoMaximoBytes / 1024 / 1024)} MB`,
       );
 
     const agora = this.relogio.agora();
@@ -99,8 +104,9 @@ export class SolicitarEnvioUseCase {
    * custo isso basta; o rate limit global segura rajadas maiores.
    */
   private async verificarCota(usuarioId: string, agora: Date): Promise<void> {
-    const { maximo, janelaSegundos } = this.limitePendentes;
-    if (!Number.isFinite(maximo)) return; // cota desligada: nem consulta o banco
+    const cota = this.politica.pendentes;
+    if (!cota) return; // cota desligada: nem consulta o banco
+    const { maximo, janelaSegundos } = cota;
 
     const desde = new Date(agora.getTime() - janelaSegundos * 1000);
     const abertos = await this.videos.contarAguardandoEnvioDesde(usuarioId, desde);

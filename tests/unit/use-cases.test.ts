@@ -39,14 +39,9 @@ beforeEach(() => {
 
 describe('SolicitarEnvioUseCase', () => {
   const caso = () =>
-    new SolicitarEnvioUseCase(
-      videos,
-      armazenamento,
-      cache,
-      idsSequenciais(),
-      relogioFixo(),
-      10 * MB,
-    );
+    new SolicitarEnvioUseCase(videos, armazenamento, cache, idsSequenciais(), relogioFixo(), {
+      tamanhoMaximoBytes: 10 * MB,
+    });
 
   it('registra o vídeo e devolve a URL de envio', async () => {
     cache.dados.set(chaveListaDoUsuario(USUARIO.id), []);
@@ -92,15 +87,10 @@ describe('SolicitarEnvioUseCase', () => {
 
   describe('cota de envios em aberto', () => {
     const comCota = (maximo: number) =>
-      new SolicitarEnvioUseCase(
-        videos,
-        armazenamento,
-        cache,
-        idsSequenciais(),
-        relogioFixo(),
-        10 * MB,
-        { maximo, janelaSegundos: 900 },
-      );
+      new SolicitarEnvioUseCase(videos, armazenamento, cache, idsSequenciais(), relogioFixo(), {
+        tamanhoMaximoBytes: 10 * MB,
+        pendentes: { maximo, janelaSegundos: 900 },
+      });
     const pedido = {
       usuario: USUARIO,
       nomeArquivo: 'a.mp4',
@@ -140,6 +130,23 @@ describe('SolicitarEnvioUseCase', () => {
 describe('ConfirmarEnvioUseCase', () => {
   const caso = () =>
     new ConfirmarEnvioUseCase(videos, armazenamento, cache, idsSequenciais(), relogioFixo());
+
+  it('duas confirmações simultâneas geram um único video.enviado', async () => {
+    const video = novoVideo();
+    await videos.criar(video);
+    armazenamento.objetos.set(video.chaveVideo, 1024);
+
+    // Duplo clique: as duas chamadas leem AGUARDANDO_ENVIO antes de qualquer gravação.
+    const resultados = await Promise.allSettled([
+      caso().execute(USUARIO.id, video.id),
+      caso().execute(USUARIO.id, video.id),
+    ]);
+
+    expect(resultados.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const recusada = resultados.find((r) => r.status === 'rejected');
+    expect((recusada as PromiseRejectedResult).reason).toBeInstanceOf(ConflictError);
+    expect(videos.outbox).toHaveLength(1);
+  });
 
   it('coloca o vídeo na fila e grava video.enviado no outbox', async () => {
     const video = novoVideo();
