@@ -1,0 +1,3 @@
+ignored:
+  # Versões dos pacotes do Alpine acompanham a imagem base, atualizada pelo Dependabot.
+  - DL3018

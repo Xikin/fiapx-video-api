@@ -1,0 +1,846 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FIAP X — Video API",
+    "version": "0.1.0",
+    "description": "Envio de vídeos, acompanhamento do processamento e download dos frames."
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Liveness",
+        "tags": ["Saúde"],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness",
+        "tags": ["Saúde"],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/videos/": {
+      "post": {
+        "summary": "Registra um vídeo e devolve a URL assinada para enviá-lo ao S3",
+        "tags": ["Vídeos"],
+        "description": "Envie o arquivo com `PUT` na `envio.url`, usando os `envio.cabecalhos`, e depois chame `POST /videos/{id}/confirmar-envio`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nomeArquivo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "pattern": "^[^\\p{Cc}\\p{Cf}]+$"
+                  },
+                  "contentType": {
+                    "type": "string",
+                    "enum": [
+                      "video/mp4",
+                      "video/quicktime",
+                      "video/x-msvideo",
+                      "video/x-matroska",
+                      "video/webm"
+                    ]
+                  },
+                  "tamanhoBytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": ["nomeArquivo", "contentType", "tamanhoBytes"]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "video": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "nomeArquivo": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "AGUARDANDO_ENVIO",
+                            "NA_FILA",
+                            "PROCESSANDO",
+                            "CONCLUIDO",
+                            "FALHOU"
+                          ]
+                        },
+                        "tamanhoBytes": {
+                          "type": "number"
+                        },
+                        "totalFrames": {
+                          "nullable": true,
+                          "type": "number"
+                        },
+                        "motivoFalha": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "downloadDisponivel": {
+                          "type": "boolean"
+                        },
+                        "criadoEm": {
+                          "type": "string"
+                        },
+                        "atualizadoEm": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "nomeArquivo",
+                        "status",
+                        "tamanhoBytes",
+                        "totalFrames",
+                        "motivoFalha",
+                        "downloadDisponivel",
+                        "criadoEm",
+                        "atualizadoEm"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "envio": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "metodo": {
+                          "type": "string",
+                          "enum": ["PUT", "GET"]
+                        },
+                        "cabecalhos": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        },
+                        "expiraEm": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": ["url", "metodo", "cabecalhos", "expiraEm"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["video", "envio"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Lista os vídeos do usuário com o status de cada um",
+        "tags": ["Vídeos"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "videos": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "nomeArquivo": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "AGUARDANDO_ENVIO",
+                              "NA_FILA",
+                              "PROCESSANDO",
+                              "CONCLUIDO",
+                              "FALHOU"
+                            ]
+                          },
+                          "tamanhoBytes": {
+                            "type": "number"
+                          },
+                          "totalFrames": {
+                            "nullable": true,
+                            "type": "number"
+                          },
+                          "motivoFalha": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "downloadDisponivel": {
+                            "type": "boolean"
+                          },
+                          "criadoEm": {
+                            "type": "string"
+                          },
+                          "atualizadoEm": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "nomeArquivo",
+                          "status",
+                          "tamanhoBytes",
+                          "totalFrames",
+                          "motivoFalha",
+                          "downloadDisponivel",
+                          "criadoEm",
+                          "atualizadoEm"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["videos"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/videos/{id}/confirmar-envio": {
+      "post": {
+        "summary": "Confirma que o arquivo chegou ao S3 e coloca o vídeo na fila",
+        "tags": ["Vídeos"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "nomeArquivo": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["AGUARDANDO_ENVIO", "NA_FILA", "PROCESSANDO", "CONCLUIDO", "FALHOU"]
+                    },
+                    "tamanhoBytes": {
+                      "type": "number"
+                    },
+                    "totalFrames": {
+                      "nullable": true,
+                      "type": "number"
+                    },
+                    "motivoFalha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "downloadDisponivel": {
+                      "type": "boolean"
+                    },
+                    "criadoEm": {
+                      "type": "string"
+                    },
+                    "atualizadoEm": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "nomeArquivo",
+                    "status",
+                    "tamanhoBytes",
+                    "totalFrames",
+                    "motivoFalha",
+                    "downloadDisponivel",
+                    "criadoEm",
+                    "atualizadoEm"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/videos/{id}": {
+      "get": {
+        "summary": "Detalhe e status de um vídeo",
+        "tags": ["Vídeos"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "nomeArquivo": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["AGUARDANDO_ENVIO", "NA_FILA", "PROCESSANDO", "CONCLUIDO", "FALHOU"]
+                    },
+                    "tamanhoBytes": {
+                      "type": "number"
+                    },
+                    "totalFrames": {
+                      "nullable": true,
+                      "type": "number"
+                    },
+                    "motivoFalha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "downloadDisponivel": {
+                      "type": "boolean"
+                    },
+                    "criadoEm": {
+                      "type": "string"
+                    },
+                    "atualizadoEm": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "nomeArquivo",
+                    "status",
+                    "tamanhoBytes",
+                    "totalFrames",
+                    "motivoFalha",
+                    "downloadDisponivel",
+                    "criadoEm",
+                    "atualizadoEm"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/videos/{id}/download": {
+      "get": {
+        "summary": "URL assinada para baixar o zip com os frames",
+        "tags": ["Vídeos"],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "metodo": {
+                      "type": "string",
+                      "enum": ["PUT", "GET"]
+                    },
+                    "cabecalhos": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "expiraEm": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": ["url", "metodo", "cabecalhos", "expiraEm"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "number"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "campo": {
+                            "type": "string"
+                          },
+                          "mensagem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["campo"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["statusCode", "code", "message"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Vídeos"
+    },
+    {
+      "name": "Saúde"
+    }
+  ]
+}

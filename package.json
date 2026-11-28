@@ -1,0 +1,60 @@
+{
+  "name": "fiapx-video-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FIAP X — API de envio, acompanhamento e download de vídeos processados",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:watch": "vitest",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "openapi:export": "tsx scripts/export-openapi.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1178.0",
+    "@aws-sdk/s3-request-presigner": "^3.1178.0",
+    "@fastify/cors": "^11.4.3",
+    "@fastify/jwt": "^10.2.9",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.9.5",
+    "@fastify/swagger-ui": "^6.1.5",
+    "@prisma/client": "^5.22.0",
+    "amqplib": "^2.4.2",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.12.8",
+    "fastify-plugin": "^5.1.0",
+    "fastify-type-provider-zod": "^7.0.0",
+    "ioredis": "^5.11.1",
+    "nodemailer": "^10.6.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@testcontainers/localstack": "^10.28.0",
+    "@testcontainers/postgresql": "^10.28.0",
+    "@testcontainers/rabbitmq": "^10.28.0",
+    "@types/node": "^22.20.7",
+    "@types/nodemailer": "^8.0.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "eslint": "^9.39.5",
+    "fast-jwt": "^6.3.7",
+    "prettier": "^3.10.1",
+    "prisma": "^5.22.0",
+    "testcontainers": "^10.28.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^2.1.9"
+  }
+}

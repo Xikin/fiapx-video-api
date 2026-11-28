@@ -1,0 +1,99 @@
+name: fiapx
+
+# Ambiente local completo (ADR 0006). O fiapx-video-processor e o fiapx-auth-lambda
+# entram neste mesmo arquivo quando seus repositórios estiverem prontos.
+
+x-mensageria: &mensageria
+  RABBITMQ_URL: amqp://fiapx:${RABBITMQ_PASSWORD:-fiapx_local}@rabbitmq:5672
+  MENSAGERIA_MAX_TENTATIVAS: 5
+  MENSAGERIA_ATRASO_RETENTATIVA_MS: 2000
+
+x-aws-local: &aws-local
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  S3_BUCKET: fiapx-videos
+  S3_ENDPOINT: http://localstack:4566
+  S3_FORCE_PATH_STYLE: 'true'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fiapx
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fiapx_local}
+      POSTGRES_DB: fiapx_videos
+    ports: ['127.0.0.1:5432:5432']
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U fiapx -d fiapx_videos']
+      interval: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: fiapx
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-fiapx_local}
+    ports: ['127.0.0.1:5672:5672', '127.0.0.1:15672:15672']
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'check_port_connectivity']
+      interval: 10s
+      retries: 12
+
+  redis:
+    image: redis:7.4-alpine
+    command:
+      ['redis-server', '--save', '', '--maxmemory', '64mb', '--maxmemory-policy', 'allkeys-lru']
+    ports: ['127.0.0.1:6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  # S3 local. A validação de assinatura fica ligada para o ambiente local se comportar como a AWS.
+  localstack:
+    image: localstack/localstack:4.0
+    environment:
+      SERVICES: s3
+      S3_SKIP_SIGNATURE_VALIDATION: '0'
+      S3_BUCKET: fiapx-videos
+    ports: ['127.0.0.1:4566:4566']
+    volumes: ['./infra/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro']
+    healthcheck:
+      test: ['CMD-SHELL', 'awslocal s3api head-bucket --bucket fiapx-videos']
+      interval: 5s
+      retries: 20
+
+  # Caixa de e-mail local: os avisos de falha aparecem em http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
+
+  video-api:
+    build: .
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      localstack: { condition: service_healthy }
+    environment:
+      <<: [*mensageria, *aws-local]
+      NODE_ENV: production
+      DATABASE_URL: postgresql://fiapx:${POSTGRES_PASSWORD:-fiapx_local}@postgres:5432/fiapx_videos
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env (veja .env.example)}
+      S3_ENDPOINT_PUBLICO: http://localhost:4566
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:8080
+      # Em produção o Swagger fica desligado por padrão; aqui ligamos para usar o /docs.
+      SWAGGER_ENABLED: 'true'
+    ports: ['127.0.0.1:3000:3000']
+
+volumes:
+  postgres_data:
+  rabbitmq_data:

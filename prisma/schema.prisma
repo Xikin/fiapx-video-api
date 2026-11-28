@@ -1,0 +1,60 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StatusVideo {
+  AGUARDANDO_ENVIO
+  NA_FILA
+  PROCESSANDO
+  CONCLUIDO
+  FALHOU
+}
+
+model Video {
+  id           String      @id @db.Uuid
+  usuarioId    String      @map("usuario_id")
+  emailUsuario String      @map("email_usuario")
+  nomeArquivo  String      @map("nome_arquivo")
+  contentType  String      @map("content_type")
+  tamanhoBytes BigInt      @map("tamanho_bytes")
+  chaveVideo   String      @map("chave_video")
+  chaveZip     String?     @map("chave_zip")
+  totalFrames  Int?        @map("total_frames")
+  status       StatusVideo
+  motivoFalha  String?     @map("motivo_falha")
+  criadoEm     DateTime    @default(now()) @map("criado_em")
+  atualizadoEm DateTime    @updatedAt @map("atualizado_em")
+
+  @@index([usuarioId, criadoEm(sort: Desc)])
+  @@map("videos")
+}
+
+/// Mensagens a publicar no RabbitMQ, gravadas na mesma transação da mudança de estado (ADR 0003).
+model Outbox {
+  id          String    @id @db.Uuid
+  routingKey  String    @map("routing_key")
+  payload     Json
+  tentativas  Int       @default(0)
+  criadoEm    DateTime  @default(now()) @map("criado_em")
+  publicadoEm DateTime? @map("publicado_em")
+
+  @@index([publicadoEm, criadoEm])
+  @@map("outbox")
+}
+
+/// Mensagens já consumidas, para tornar o consumo idempotente.
+model MensagemProcessada {
+  id           String   @db.Uuid
+  consumidor   String
+  processadaEm DateTime @default(now()) @map("processada_em")
+
+  @@id([id, consumidor])
+  @@index([processadaEm])
+  @@map("mensagens_processadas")
+}
