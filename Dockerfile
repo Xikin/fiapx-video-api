@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache openssl
 COPY package*.json ./
@@ -11,7 +11,7 @@ COPY tsconfig*.json ./
 COPY src ./src
 RUN npx prisma generate && npm run build && npm prune --omit=dev
 
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production HOME=/tmp CHECKPOINT_DISABLE=1
 # UID/GID fixos: o Kubernetes (runAsNonRoot) só confirma que não é root com um usuário numérico.
